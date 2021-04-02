@@ -1,0 +1,313 @@
+---
+title: "SR paper analyses for JAPD resubmission"
+author: "NRG"
+date: "3/4/2021"
+output:
+  html_document:
+    code_folding: hide
+    df_print: default
+    highlight: tango
+    smart: no
+    theme: united
+    toc: yes
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+  word_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+    df_print: kable
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)    
+library(ggrepel)
+library(haven)        
+library(DescTools)
+library(rcompanion)
+library(aod)
+library(psych)
+library(janitor)    
+library(ggplot2)
+library(ggpubr)
+library(lavaan)
+library(lavaanPlot)
+library(semPlot) 
+library(stargazer)
+library(multilevel)
+library(MBESS)
+library(sjPlot)
+library(sjmisc)
+library(sjlabelled)
+library(apaTables)
+library(gvlma)
+library(rockchalk)
+library(jtools)
+
+options("scipen"=100, "digits"=4)
+```
+
+## Descriptives
+
+Data set descriptives for these analyses:
+
+```{r import describe, include=FALSE}
+workdir="/Volumes/Macintosh HD/Volumes/Macintosh HD/Users/giuliani/OneDrive\ -\ University\ Of\ Oregon/PCSR/Papers/General\ SR/JAPD\ submission/"
+
+PCSR.data <- read.csv(file.path(workdir,"SRdata_winsorized.csv", fsep=""))
+
+attach(PCSR.data)
+
+describe(childAge)
+describe(sex)
+describe(matAge)
+describe(Snack_avg)
+describe(Food_RegLCRC)
+describe(FishFlanker_ComputedScore)
+describe(ChildGNGcomp)
+describe(FLA_ACC_diffx100)
+describe(AdultGNG_perCorrx100)
+describe(income)
+describe(matYrsEd)
+```
+
+``` {r transform and check, include=FALSE}
+# transform if skewness >1
+PCSR.data$t_momFLA <- transformTukey(FLA_ACC_diffx100)
+describe(PCSR.data$t_momFLA) #still just as skewed, use raw
+PCSR.data$t_momGNG <- transformTukey(AdultGNG_perCorr)
+describe(PCSR.data$t_momGNG) #skewness improved (but still -1.15), use transformed 
+PCSR.data$t_income <- transformTukey(income)
+describe(PCSR.data$t_income) #skewness improved to 0.12, use transformed 
+
+attach(PCSR.data)
+hist(Snack_avg)
+hist(FishFlanker_ComputedScore)
+hist(ChildGNGcomp)
+hist(Food_RegLCRC)
+hist(FLA_ACC_diffx100)
+hist(t_momGNG)
+hist(t_income)
+hist(matYrsEd)
+hist(childAge)
+```
+
+``` {r correlations, echo=TRUE}
+SRALL.data <- dplyr::select(PCSR.data, childAge, sex, matYrsEd, t_income, Snack_avg, FishFlanker_ComputedScore, ChildGNGcomp, Food_RegLCRC, FLA_ACC_diffx100, t_momGNG)
+
+# remove empty rows (subjects who consented but never provided any data)
+SR.data <- SRALL.data[-c(19, 28, 40, 91, 93),]
+
+desc.data <- dplyr::select(PCSR.data, Snack_avg, FishFlanker_ComputedScore, ZooGNG_percCorr, FishGNG_percCorrx100, Food_RegLCRC, FLA_ACC_diffx100, AdultGNG_perCorrx100)
+
+corr.data <- dplyr::select(PCSR.data, Snack_avg, FishFlanker_ComputedScore, ChildGNGcomp, Food_RegLCRC, FLA_ACC_diffx100, t_momGNG, matYrsEd, t_income)
+
+apa.cor.table(corr.data, filename="corrTable.doc")
+
+stargazer(as.data.frame(desc.data), type = "text", 
+          title = "Task and Parenting Descriptive Statistics", digits = 2,
+          covariate.labels = c("Child appetitive SR (snack delay, score 0-1 x 4 trials)", 
+                               "Child attentional control (Flanker, computed score)", 
+                               "Child inhibitory control (Zoo GNG, % correct)",
+                               "Child inhibitory control (Fish GNG, % correct)",
+                               "Mother appetitive SR (Food craving self-regulation, Look Crave - Regulate Crave)*",
+                               "Mother attentional control (Flanker, % correct incongruent-congruent*",
+                               "Mother inhibitory control (GNG, % correct)"),
+          omit.summary.stat = c("p25", "p75"), min.max = TRUE, notes = "Raw data shown here; outliers were winsorized 3SD from the mean for analyses (marked with an *).")
+
+write.csv(SR.data, "SRdata.csv")
+```
+
+# Multiple Imputation
+```{r multiple imputation, include=FALSE}
+library(mice)
+
+md.pattern(SR.data)
+
+impData <- mice(SR.data, m=10, maxit=50, meth='pmm', seed=500)
+summary(impData)
+
+# examime imputed data to see if look reasonable
+cData <- complete(impData, "long", include = TRUE)
+cData$FishFlanker_ComputedScore.NA <- cci(SR.data$FishFlanker_ComputedScore)
+head(cData[, c("FishFlanker_ComputedScore", "FishFlanker_ComputedScore.NA")])
+
+ggplot(cData, aes(x = .imp, y = FishFlanker_ComputedScore, color = FishFlanker_ComputedScore.NA)) + 
+  geom_jitter(show.legend = FALSE, 
+              width = .1)
+
+# pull out some imputed data sets for plotting
+cData3 <- complete(impData, 3)
+cData6 <- complete(impData, 6)
+
+```
+
+## Correlations with imputed data
+```{r imputed corr, echo=TRUE}
+library(miceadds)
+
+corr.vars1 <- c("Snack_avg", "FishFlanker_ComputedScore", "ChildGNGcomp", "Food_RegLCRC", "FLA_ACC_diffx100", "t_momGNG", "matYrsEd", "t_income")
+corr.data <- SR.data[corr.vars1]
+
+stargazer(corr.data, type = "text")
+apa.cor.table(corr.data, filename="Table2.doc", table.number=2)
+
+micombine.cor(impData, variables = corr.vars1, conf.level = 0.95, method = "pearson", nested = FALSE, partial = NULL)
+
+```
+Note: these are exactly the same correlations as with the raw data.
+
+## Hypothesis 1
+
+Testing association between mom and child appetitive SR controlling for child age and sex.
+```{r hyp 1 with sex, echo=TRUE}
+
+aSR <- with(data = impData, exp = lm(Snack_avg ~ Food_RegLCRC + sex + childAge))
+summary(pool(aSR))
+pool.r.squared(aSR)
+
+```
+
+
+## Hypothesis 2
+
+Compare with attentional and inhibitory control
+``` {r hyp 2 with sex, echo=TRUE}
+# Flanker
+FLA <- with(data = impData, exp = lm(FishFlanker_ComputedScore ~ FLA_ACC_diffx100 + sex + childAge))
+summary(pool(FLA))
+pool.r.squared(FLA)
+
+
+# GNG
+GNG <- with(data = impData, exp = lm(ChildGNGcomp ~ t_momGNG + sex + childAge))
+summary(pool(GNG))
+pool.r.squared(GNG)
+
+
+```
+
+
+Plot all three models in one figure
+
+```{r plot}
+# make models with one of the imputed data sets for plotting
+aSR_3 <- lm(Snack_avg ~ Food_RegLCRC + sex + childAge, data = cData3)
+GNG_3 <- lm(ChildGNGcomp ~ t_momGNG + sex + childAge, data = cData3)
+FLA_3 <- lm(FishFlanker_ComputedScore ~ FLA_ACC_diffx100 + sex + childAge, data = cData3)
+
+
+# make individual plots
+as <- plot_model(aSR_3, terms = "Food_RegLCRC",
+                type = "eff", 
+                title = "Appetite Self-Regulation", 
+                se = TRUE, show.data = TRUE, jitter = .05,
+                axis.title = c("Mother (Food craving self-regulation)", "Child (Snack delay)"))
+as 
+
+ac <- plot_model(FLA_3, terms = "FLA_ACC_diffx100",
+                type = "eff", 
+                title = "Attentional Control", 
+                se = TRUE, show.data = TRUE, jitter = .05,
+                axis.title = c("Mother (Flanker)", "Child (Flanker)"))
+ac
+
+ic <- plot_model(GNG_3, terms = "t_momGNG",
+                type = "eff", 
+                title = "Inhibitory Control", 
+                se = TRUE, show.data = TRUE, jitter = .05,
+                axis.title = c("Mother (Go/NoGo)", "Child (Go/NoGo)"))
+ic
+
+
+# put all on one page
+fig1 <- ggarrange(as, ac, ic, 
+          labels = c("a", "b", "c"),
+          ncol = 2, nrow = 2)
+fig1
+```
+
+
+Compare models
+
+```{r compare}
+# use multiply imputed data set 3 for plotting
+# z-score all variables since raw regression parameters are in the units of the DV
+cData3$Mom_appSR <- c(scale(cData3$Food_RegLCRC, center=TRUE, scale=TRUE))
+cData3$Child_appSR <- c(scale(cData3$Snack_avg, center=TRUE, scale=TRUE))
+cData3$Mom_GNG <- c(scale(cData3$t_momGNG, center=TRUE, scale=TRUE))
+cData3$Child_GNG <- c(scale(cData3$ChildGNGcomp, center=TRUE, scale=TRUE))
+cData3$Mom_FLA <- c(scale(cData3$FLA_ACC_diffx100, center=TRUE, scale=TRUE))
+cData3$Child_FLA <- c(scale(cData3$FishFlanker_ComputedScore, center=TRUE, scale=TRUE))
+
+aSRz <- lm(Child_appSR ~ Mom_appSR + sex + childAge, data = cData3)
+FLAz <- lm(Child_FLA ~ Mom_FLA + sex + childAge, data = cData3)
+GNGz <- lm(Child_GNG ~ Mom_GNG + sex + childAge, data = cData3)
+
+# create CIs around the regression parameters (with robust SEs)
+summ(aSRz, robust = "HC1", confint = TRUE, digits = 3)
+summ(FLAz, robust = "HC1", confint = TRUE, digits = 3)
+summ(GNGz, robust = "HC1", confint = TRUE, digits = 3)
+
+# create CIs around the regression parameters
+confint(aSRz)
+confint(FLAz)
+confint(GNGz)
+
+# plot 
+s <- plot_summs(aSRz, FLAz, GNGz, ci_level = 0.95, coefs = c("Appetite\nSelf-Regulation" = "Mom_appSR", "Inhibitory Control" = "Mom_GNG", "Attentional Control" = "Mom_FLA"), colors = "Rainbow", plot.distributions = TRUE, point.shape = FALSE, scale = TRUE)
+s + theme(legend.position = "none") + ggtitle("Association Between Mother and Child SR by Domain") +
+  xlab("Parameter Estimate of Child SR Controlling for Child Age and Sex")
+```
+
+
+## Explore moderation by SES 
+```{r SES mod, echo=TRUE}
+# moderated by mother education?
+aSR_ed <- with(data = impData, exp = lm(Snack_avg ~ Food_RegLCRC * matYrsEd + sex + childAge))
+summary(pool(aSR_ed))
+pool.r.squared(aSR_ed)
+
+FLA_ed <- with(data = impData, exp = lm(FishFlanker_ComputedScore ~ FLA_ACC_diffx100 * matYrsEd + sex + childAge))
+summary(pool(FLA_ed))
+pool.r.squared(FLA_ed)
+
+GNG_ed <- with(data = impData, exp = lm(ChildGNGcomp ~ t_momGNG * matYrsEd + sex + childAge))
+summary(pool(GNG_ed))
+pool.r.squared(GNG_ed)
+
+
+# moderated by family income?
+aSR_inc <- with(data = impData, exp = lm(Snack_avg ~ Food_RegLCRC * t_income + sex + childAge))
+summary(pool(aSR_inc))
+pool.r.squared(aSR_inc)
+
+FLA_inc <- with(data = impData, exp = lm(FishFlanker_ComputedScore ~ FLA_ACC_diffx100 * t_income + sex + childAge))
+summary(pool(FLA_inc))
+pool.r.squared(FLA_inc)
+
+GNG_inc <- with(data = impData, exp = lm(ChildGNGcomp ~ t_momGNG * t_income + sex + childAge))
+summary(pool(GNG_inc))
+pool.r.squared(GNG_inc)
+```
+
+## Explore moderation by child sex 
+``` {r sex mod, echo=TRUE}
+aSR_sex <- with(data = impData, exp = lm(Snack_avg ~ Food_RegLCRC * sex + childAge))
+summary(pool(aSR_sex))
+pool.r.squared(aSR_sex)
+
+FLA_sex <- with(data = impData, exp = lm(FishFlanker_ComputedScore ~ FLA_ACC_diffx100 * sex + childAge))
+summary(pool(FLA_sex))
+pool.r.squared(FLA_sex)
+
+GNG_sex <- with(data = impData, exp = lm(ChildGNGcomp ~ t_momGNG * sex + childAge))
+summary(pool(GNG_sex))
+pool.r.squared(GNG_sex)
+
+```
+
+
